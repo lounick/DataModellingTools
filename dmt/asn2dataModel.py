@@ -37,6 +37,7 @@ from .A_mappers import og_A_mapper
 from .A_mappers import python_A_mapper
 from .A_mappers import qgenada_A_mapper
 from .A_mappers import qgenc_A_mapper
+from .A_mappers import ros_A_mapper
 from .A_mappers import rtds_A_mapper
 from .A_mappers import scade6_A_mapper
 from .A_mappers import simulink_A_mapper
@@ -65,6 +66,7 @@ def getBackend(modelingLanguage: str) -> A_Mapper:
         'SCADE6': scade6_A_mapper,
         'Simulink': simulink_A_mapper,
         'C': c_A_mapper,
+        'ROS': ros_A_mapper,
         'RTDS': rtds_A_mapper,
         'ada': ada_A_mapper,
         'python': python_A_mapper,
@@ -99,6 +101,7 @@ def main() -> None:
         'toSIMULINK': 'Simulink',
         'toC': 'C',
         'toCPP': 'C',
+        'toROS': 'ROS',
         'toRTDS': 'RTDS',
         'toAda': 'ada',
         'toPython': 'python',
