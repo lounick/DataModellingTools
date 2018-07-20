@@ -47,40 +47,70 @@ g_ros_repr = {}
 # Computed md5 hashes
 g_md5_hashes = {}
 
+# Computed ROS message text representation
+g_msg_text = {}
+
+
 def Version() -> None:
     print("Code generator: " +
           "$Id: python_A_mapper.py $")  # pragma: no cover
 
 
 def OnStartup(unused_modelingLanguage: str, asnFile: str, outputDir: str, badTypes: SetOfBadTypenames) -> None:
-    # print(asnParser.g_modules)
-    # print(asnParser.g_names)
-    # print(asnParser.g_leafTypeDict)
-    # print(asnParser.g_typesOfFile[asnFile])
-    # print(asnParser.g_astOfFile[asnFile])
+    # import pprint
+    # pprint.pprint('===================================================================')
+    # pprint.pprint(asnParser.g_modules)
+    # pprint.pprint('-------------------------------------------------------------------')
+    # pprint.pprint(asnParser.g_names)
+    # pprint.pprint('-------------------------------------------------------------------')
+    # pprint.pprint(asnParser.g_leafTypeDict)
+    # pprint.pprint('-------------------------------------------------------------------')
+    # pprint.pprint(asnParser.g_typesOfFile)
+    # pprint.pprint('-------------------------------------------------------------------')
+    # pprint.pprint(asnParser.g_astOfFile)
+    # pprint.pprint('-------------------------------------------------------------------')
+    # pprint.pprint(asnParser.g_typesOfFile[asnFile])
+    # pprint.pprint('-------------------------------------------------------------------')
+    # pprint.pprint(asnParser.g_astOfFile[asnFile])
+    # pprint.pprint('===================================================================')
     if not asnFile.endswith(".asn"):
         panic("The ASN.1 grammar file (%s) doesn't end in .asn" %
               asnFile)  # pragma: no cover
 
     global g_ros_repr
-    g_ros_repr = {}
+    # g_ros_repr = {}
+    global g_msg_text
 
+    # For each SEQUENCE or SET we need to generate a message header
+    # Format a ROS message based on the ASN.1 message
     for msg in asnParser.g_typesOfFile[asnFile]:
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
                 isinstance(asnParser.g_names[msg], AsnSet)):
                 g_ros_repr[msg] = process_message(msg)
-        # compute_md5(asnFile, msg)
-    # For each SEQUENCE we need to generate a message header
-    # Format a ROS message based on the ASN.1 message
-    # Calculate the MD5
-    # print(g_ros_repr)
-    print("")
 
+    # Calculate the MD5 and generate the header
     for msg in asnParser.g_typesOfFile[asnFile]:
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
                 isinstance(asnParser.g_names[msg], AsnSet)):
-                print(compute_md5(msg))
-                print("")
+                compute_md5(msg)
+
+    # Generate the header
+    for msg in asnParser.g_typesOfFile[asnFile]:
+        if (isinstance(asnParser.g_names[msg], AsnSequence) or
+                isinstance(asnParser.g_names[msg], AsnSet)):
+                module = find_message_module(msg)
+                message = Message(msg, module, g_msg_text[msg],
+                                  g_md5_hashes[msg])
+                output_path = outputDir + os.sep + module
+                if not os.path.exists(output_path):
+                    os.makedirs(output_path)
+                header = open(output_path + "/" + message.name + ".h", "w")
+                msg_file = open(output_path + "/" + message.name + ".msg", "w")
+                message.make_header(header)
+                message.make_msg(msg_file)
+                header.close()
+                msg_file.close()
+
 
 
 def OnBasic(unused_nodeTypename: str, unused_node: AsnBasicNode, unused_leafTypeDict: AST_Leaftypes) -> None:
@@ -112,12 +142,32 @@ def OnChoice(unused_nodeTypename: str, unused_node: AsnChoice, unused_leafTypeDi
 
 
 def OnShutdown(unused_badTypes: SetOfBadTypenames) -> None:
+    # TODO: Add methods that translate from ASN.1 to ROS message and the opposite
     pass
+
+
+def generate_msg_text(msg: str) -> str:
+    global g_msg_text
+
+    if msg in g_msg_text.keys():
+        return g_msg_text[msg]
+
+    definition = g_ros_repr[msg]
+
+    buff = StringIO()
+
+    for const in definition['constants']:
+        buff.write("%s %s=%s\n" % (const[0], const[1], const[2]))
+
+    for var in definition['variables']:
+        buff.write("%s %s\n" % (var[0], var[1]))
+    g_msg_text[msg] = buff.getvalue().strip()
+    return buff.getvalue().strip()
 
 
 def compute_md5_from_ast(msg: str) -> str:
     global g_ros_repr
-    msg_dict = process_message(msg)
+    msg_dict = process_message(remove_module(msg))
     g_ros_repr[msg] = msg_dict
     return compute_md5(msg)
 
@@ -131,32 +181,39 @@ def compute_md5(msg: str) -> str:
     if msg in g_md5_hashes.keys():
         return g_md5_hashes[msg]
 
-    definition = g_ros_repr[msg]
-
-    buff = StringIO()
-
-    for const in definition['constants']:
-        buff.write("%s %s=%s\n" % (const[0], const[1], const[2]))
-
-    for var in definition['variables']:
-        if get_bare_type(var[0]) in primitive_types.values():
-            buff.write("%s %s\n" % (var[0], var[1]))
-        else:
-            # TODO: Must compute the md5 of the other message type
-            if var[0] in g_ros_repr.keys():
-                try:
-                    hash = g_md5_hashes[var[0]]
-                except KeyError:
-                    hash = compute_md5(var[0])
-                buff.write("%s %s\n" % (hash, var[1]))
-            else:
-                buff.write("%s %s\n" % (compute_md5_from_ast(var[0]), var[1]))
-
     hasher = hashlib.md5()
-    # print(buff.getvalue().strip())
-    hasher.update(buff.getvalue().strip().encode())
+    msg_text = generate_msg_text(msg).splitlines()
+    for idx in range(len(msg_text)):
+        line = msg_text[idx]
+        msg_type = line.split(' ')[0]
+        hash = None
+        if get_bare_type(remove_module(msg_type)) not in primitive_types.values():
+            # It is a message type and we need the md5
+            if msg_type in g_ros_repr.keys():
+                try:
+                    hash = g_md5_hashes[msg_type]
+                except KeyError:
+                    hash = compute_md5(msg_type)
+            else:
+                hash = compute_md5_from_ast(msg_type)
+            line = line.replace(msg_type, hash)
+            msg_text[idx] = line
+    final_text = '\n'.join(msg_text)
+    hasher.update(final_text.encode())
     g_md5_hashes[msg] = hasher.hexdigest()
     return hasher.hexdigest()
+
+
+def find_message_module(msg: str) -> str:
+    num = 0
+    ret = None
+    for k, v in asnParser.g_modules.items():
+        if msg in v:
+            ret = k
+            num += 1
+    if num > 1:
+        panic("Can't handle that for now...")
+    return ret
 
 
 def process_message(msg: str) -> dict:
@@ -167,7 +224,10 @@ def process_message(msg: str) -> dict:
     #
     # index = types.index(msg)
     # definition = ast[index]
-    definition = asnParser.g_names[msg]
+    try:
+        definition = asnParser.g_names[msg]
+    except KeyError:
+        panic("I don't have the info to build message %s" % (msg))
 
     # print("-----------------------------------")
     # print(definition)
@@ -199,30 +259,39 @@ def process_message(msg: str) -> dict:
                 data_type = get_enum_data_type(enum_members)
                 msg_dict['variables'].append([data_type, member[0]])
             elif leaf_type is 'SEQUENCE' or leaf_type is 'SET':
-                msg_dict['variables'].append([member_type, member[0]])
+                msg_dict['variables'].append(
+                    [find_message_module(member_type) + '/' + member_type,
+                     member[0]])
             elif leaf_type is 'SEQUENCEOF' or leaf_type is 'SETOF':
                 contained_type = asnParser.g_names[member_type]._containedType
                 contained_leaf_type = leaf_types[contained_type]
                 min_range, max_range = asnParser.g_names[member_type]._range
+                # Decide if it is a fixed or a variable size array
+                # This is done by checking the array limits
                 array_str = "[]"
                 if min_range == max_range:
                     array_str = "[%d]" % (min_range)
                 if (contained_leaf_type is 'SEQUENCE' or
                         contained_leaf_type is 'SET'):
-                        msg_dict['variables'].append([contained_type+array_str, member[0]])
+                        msg_dict['variables'].append(
+                            [find_message_module(contained_type) +
+                             '/' + contained_type+array_str, member[0]])
                 elif (contained_leaf_type is 'ENUMERATED'):
                     enum_members = asnParser.g_names[contained_type]._members
                     data_type = get_enum_data_type(enum_members)
-                    msg_dict['variables'].append([data_type+array_str, member[0]])
+                    msg_dict['variables'].append(
+                        [data_type+array_str, member[0]])
                 else:
-                    # Decide if it is a fixed or a variable size array
-                    # This is done by checking the array limits
                     if contained_type in primitive_types.keys():
-                        msg_dict['variables'].append([primitive_types[contained_type]+array_str, member[0]])
+                        msg_dict['variables'].append(
+                            [primitive_types[contained_type]+array_str,
+                                member[0]])
                     else:
-                        msg_dict['variables'].append([find_type(contained_type)+array_str, member[0]])
+                        msg_dict['variables'].append(
+                            [find_type(contained_type)+array_str, member[0]])
             elif member_type in primitive_types.keys():
-                msg_dict['variables'].append([primitive_types[member_type], member[0]])
+                msg_dict['variables'].append(
+                    [primitive_types[member_type], member[0]])
             else:
                 msg_dict['variables'].append([find_type(member[1]), member[0]])
         return msg_dict
@@ -312,3 +381,514 @@ def get_bare_type(msg_type: str) -> str:
     if '[' in msg_type:
         return msg_type[:msg_type.find('[')]
     return msg_type
+
+
+def remove_module(msg_type: str) -> str:
+    if msg_type is None:
+        return None
+    if '/' in msg_type:
+        return msg_type[msg_type.find('/')+1:]
+    return msg_type
+
+
+def type_to_var(ty):
+    lookup = {
+        1: 'uint8_t',
+        2: 'uint16_t',
+        4: 'uint32_t',
+        8: 'uint64_t',
+    }
+    return lookup[ty]
+
+# Data Types
+
+
+class EnumerationType:
+    """ For data values. """
+
+    def __init__(self, name, ty, value):
+        self.name = name
+        self.type = ty
+        self.value = value
+
+    def make_declaration(self, f):
+        f.write('    enum { %s = %s };\n' % (self.name, self.value))
+
+
+class PrimitiveDataType:
+    """ Our datatype is a C/C++ primitive. """
+
+    def __init__(self, name, ty, bytes):
+        self.name = name
+        self.type = ty
+        self.bytes = bytes
+
+    def make_initializer(self, f, trailer):
+        f.write('      %s(0)%s\n' % (self.name, trailer))
+
+    def make_declaration(self, f):
+        f.write('    typedef %s _%s_type;\n    _%s_type %s;\n' %
+                (self.type, self.name, self.name, self.name))
+
+    def serialize(self, f):
+        cn = self.name.replace("[", "").replace("]", "").split(".")[-1]
+        if self.type != type_to_var(self.bytes):
+            f.write('      union {\n')
+            f.write('        %s real;\n' % self.type)
+            f.write('        %s base;\n' % type_to_var(self.bytes))
+            f.write('      } u_%s;\n' % cn)
+            f.write('      u_%s.real = this->%s;\n' % (cn, self.name))
+            for i in range(self.bytes):
+                f.write('      *(outbuffer + offset + %d) = '
+                        '(u_%s.base >> (8 * %d)) & 0xFF;\n' % (i, cn, i))
+        else:
+            for i in range(self.bytes):
+                f.write('      *(outbuffer + offset + %d) = '
+                        '(this->%s >> (8 * %d)) & 0xFF;\n' % (i, self.name, i))
+        f.write('      offset += sizeof(this->%s);\n' % self.name)
+
+    def deserialize(self, f):
+        cn = self.name.replace("[", "").replace("]", "").split(".")[-1]
+        if self.type != type_to_var(self.bytes):
+            f.write('      union {\n')
+            f.write('        %s real;\n' % self.type)
+            f.write('        %s base;\n' % type_to_var(self.bytes))
+            f.write('      } u_%s;\n' % cn)
+            f.write('      u_%s.base = 0;\n' % cn)
+            for i in range(self.bytes):
+                f.write('      u_%s.base |= ((%s) (*(inbuffer + offset + %d))) << '
+                        '(8 * %d);\n' % (cn, type_to_var(self.bytes), i, i))
+            f.write('      this->%s = u_%s.real;\n' % (self.name, cn))
+        else:
+            f.write('      this->%s = '
+                    '((%s) (*(inbuffer + offset)));\n' % (self.name, self.type))
+            for i in range(self.bytes-1):
+                f.write('      this->%s |= ((%s) (*(inbuffer + offset + %d))) << '
+                        '(8 * %d);\n' % (self.name, self.type, i+1, i+1))
+        f.write('      offset += sizeof(this->%s);\n' % self.name)
+
+    def convert_from(self, f, spacing, prefix=None):
+        name = prefix + '.' + self.name if prefix is not None else self.name
+        f.write(spacing + '%s = var->%s;\n' % (name, name))
+
+    def convert_to(self, f, spacing, prefix=None):
+        name = prefix + '.' + self.name if prefix is not None else self.name
+        f.write(spacing + 'var->%s = %s;\n' % (name, name))
+
+
+class MessageDataType(PrimitiveDataType):
+    """ For when our data type is another message. """
+
+    def make_initializer(self, f, trailer):
+        f.write('      %s()%s\n' % (self.name, trailer))
+
+    def serialize(self, f):
+        f.write('      offset += this->%s.serialize(outbuffer + offset);\n' %
+                self.name)
+
+    def deserialize(self, f):
+        f.write('      offset += this->%s.deserialize(inbuffer + offset);\n' %
+                self.name)
+
+    def convert_from(self, f, spacing, prefix=None):
+        name = prefix + '.' + self.name if prefix is not None else self.name
+        f.write(spacing + '%s.fromASN1(&var->%s);\n' % (name, name))
+
+    def convert_to(self, f, spacing, prefix=None):
+        name = prefix + '.' + self.name if prefix is not None else self.name
+        f.write(spacing + '%s.toASN1(&var->%s);\n' % (name, name))
+
+class StringDataType(PrimitiveDataType):
+    """ Need to convert to signed char *. """
+
+    def make_initializer(self, f, trailer):
+        f.write('      %s("")%s\n' % (self.name, trailer))
+
+    def make_declaration(self, f):
+        f.write('    typedef const char* _%s_type;\n    _%s_type %s;\n' %
+                (self.name, self.name, self.name))
+
+    def serialize(self, f):
+        cn = self.name.replace("[", "").replace("]", "")
+        f.write('      uint32_t length_%s = strlen(this->%s);\n' % (cn, self.name))
+        f.write('      varToArr(outbuffer + offset, length_%s);\n' % cn)
+        f.write('      offset += 4;\n')
+        f.write('      memcpy(outbuffer + offset, this->%s, length_%s);\n' %
+                (self.name, cn))
+        f.write('      offset += length_%s;\n' % cn)
+
+    def deserialize(self, f):
+        cn = self.name.replace("[", "").replace("]", "")
+        f.write('      uint32_t length_%s;\n' % cn)
+        f.write('      arrToVar(length_%s, (inbuffer + offset));\n' % cn)
+        f.write('      offset += 4;\n')
+        f.write('      for(unsigned int k= offset; k< offset+length_%s; ++k){\n' %
+                cn)  # shift for null character
+        f.write('        inbuffer[k-1]=inbuffer[k];\n')
+        f.write('      }\n')
+        f.write('      inbuffer[offset+length_%s-1]=0;\n' % cn)
+        f.write('      this->%s = (char *)(inbuffer + offset-1);\n' % self.name)
+        f.write('      offset += length_%s;\n' % cn)
+
+
+class TimeDataType(PrimitiveDataType):
+
+    def __init__(self, name, ty, bytes):
+        self.name = name
+        self.type = ty
+        self.sec = PrimitiveDataType(name+'.sec', 'uint32_t', 4)
+        self.nsec = PrimitiveDataType(name+'.nsec', 'uint32_t', 4)
+
+    def make_initializer(self, f, trailer):
+        f.write('      %s()%s\n' % (self.name, trailer))
+
+    def make_declaration(self, f):
+        f.write('    typedef %s _%s_type;\n    _%s_type %s;\n' %
+                (self.type, self.name, self.name, self.name))
+
+    def serialize(self, f):
+        self.sec.serialize(f)
+        self.nsec.serialize(f)
+
+    def deserialize(self, f):
+        self.sec.deserialize(f)
+        self.nsec.deserialize(f)
+
+
+class ArrayDataType(PrimitiveDataType):
+
+    def __init__(self, name, ty, bytes, cls, array_size=None):
+        self.name = name
+        self.type = ty
+        self.bytes = bytes
+        self.size = array_size
+        self.cls = cls
+
+    def make_initializer(self, f, trailer):
+        if self.size is None:
+            f.write('      %s_length(0), %s(NULL)%s\n' %
+                    (self.name, self.name, trailer))
+        else:
+            f.write('\t%s()%s\n' % (self.name, trailer))
+
+    def make_declaration(self, f):
+        if self.size is None:
+            f.write('    uint32_t %s_length;\n' % self.name)
+            f.write('    typedef %s _%s_type;\n' % (self.type, self.name))
+            f.write('    _%s_type st_%s;\n' % (self.name, self.name))  # static instance for copy
+            f.write('    _%s_type * %s;\n' % (self.name, self.name))
+        else:
+            f.write('    %s %s[%d];\n' % (self.type, self.name, self.size))
+
+    def serialize(self, f):
+        c = self.cls(self.name+"[i]", self.type, self.bytes)
+        if self.size is None:
+            # serialize length
+            f.write('      *(outbuffer + offset + 0) = '
+                    '(this->%s_length >> (8 * 0)) & 0xFF;\n' % self.name)
+            f.write('      *(outbuffer + offset + 1) = '
+                    '(this->%s_length >> (8 * 1)) & 0xFF;\n' % self.name)
+            f.write('      *(outbuffer + offset + 2) = '
+                    '(this->%s_length >> (8 * 2)) & 0xFF;\n' % self.name)
+            f.write('      *(outbuffer + offset + 3) = '
+                    '(this->%s_length >> (8 * 3)) & 0xFF;\n' % self.name)
+            f.write('      offset += sizeof(this->%s_length);\n' % self.name)
+            f.write('      for( uint32_t i = 0; i < %s_length; i++){\n' % self.name)
+            c.serialize(f)
+            f.write('      }\n')
+        else:
+            f.write('      for( uint32_t i = 0; i < %d; i++){\n' % (self.size))
+            c.serialize(f)
+            f.write('      }\n')
+
+    def deserialize(self, f):
+        if self.size is None:
+            c = self.cls("st_"+self.name, self.type, self.bytes)
+            # deserialize length
+            f.write('      uint32_t %s_lengthT = '
+                    '((uint32_t) (*(inbuffer + offset)));\n' % self.name)
+            f.write('      %s_lengthT |= ((uint32_t) '
+                    '(*(inbuffer + offset + 1))) << (8 * 1);\n' % self.name)
+            f.write('      %s_lengthT |= ((uint32_t) '
+                    '(*(inbuffer + offset + 2))) << (8 * 2);\n' % self.name)
+            f.write('      %s_lengthT |= ((uint32_t) '
+                    '(*(inbuffer + offset + 3))) << (8 * 3);\n' % self.name)
+            f.write('      offset += sizeof(this->%s_length);\n' % self.name)
+            f.write('      if(%s_lengthT > %s_length)\n' % (self.name, self.name))
+            f.write('        this->%s = '
+                    '(%s*)realloc(this->%s, %s_lengthT * sizeof(%s));\n' %
+                    (self.name, self.type, self.name, self.name, self.type))
+            f.write('      %s_length = %s_lengthT;\n' % (self.name, self.name))
+            # copy to array
+            f.write('      for( uint32_t i = 0; i < %s_length; i++){\n' %
+                    (self.name))
+            c.deserialize(f)
+            f.write('        memcpy( &(this->%s[i]), &(this->st_%s), sizeof(%s));\n'
+                    % (self.name, self.name, self.type))
+            f.write('      }\n')
+        else:
+            c = self.cls(self.name+"[i]", self.type, self.bytes)
+            f.write('      for( uint32_t i = 0; i < %d; i++){\n' % (self.size))
+            c.deserialize(f)
+            f.write('      }\n')
+
+
+# Messages
+
+class Message:
+    """ Parses message definitions into something we can export. """
+    global ROS_TO_EMBEDDED_TYPES
+
+    def __init__(self, name: str, package: str, definition: str, md5: str) -> None:
+
+        self.name = name            # name of message/class
+        self.package = package      # package we reside in
+        self.md5 = md5              # checksum
+        self.includes = list()      # other files we must include
+
+        self.data = list()          # data types for code generation
+        self.enums = list()
+
+        self.message_text = definition
+
+        # parse definition
+        definition = definition.splitlines()
+        for line in definition:
+            # prep work
+            line = line.strip().rstrip()
+            value = None
+            # Remove the comments
+            if line.find("#") > -1:
+                line = line[0:line.find("#")]
+
+            # Get the value of a variable if present
+            if line.find("=") > -1:
+                try:
+                    value = line[line.find("=")+1:]
+                except Exception as e:
+                    value = '"' + line[line.find("=")+1:] + '"'
+                line = line[0:line.find("=")]
+
+            # find package/class name
+            line = line.replace("\t", " ")
+            l = line.split(" ")
+            while "" in l:
+                l.remove("")
+            if len(l) < 2:
+                continue
+            ty, name = l[0:2]
+            if value is not None:
+                self.enums.append(EnumerationType(name, ty, value))
+                continue
+
+            try:
+                type_package, type_name = ty.split("/")
+            except Exception as e:
+                type_package = None
+                type_name = ty
+            type_array = False
+            if type_name.find('[') > 0:
+                type_array = True
+                try:
+                    type_array_size = int(type_name[
+                        type_name.find('[')+1:type_name.find(']')])
+                except Exception as e:
+                    type_array_size = None
+                type_name = type_name[0:type_name.find('[')]
+
+            # convert to C type if primitive, expand name otherwise
+            try:
+                code_type = ROS_TO_EMBEDDED_TYPES[type_name][0]
+                size = ROS_TO_EMBEDDED_TYPES[type_name][1]
+                cls = ROS_TO_EMBEDDED_TYPES[type_name][2]
+                for include in ROS_TO_EMBEDDED_TYPES[type_name][3]:
+                    if include not in self.includes:
+                        self.includes.append(include)
+            except Exception as e:
+                print("Type %s not in ROS_TO_EMBEDDED_TYPES" % type_name)
+                if type_package is None and self.package is not None:
+                    type_package = self.package
+                if type_package is not None:
+                    if type_package+"/"+type_name not in self.includes:
+                        self.includes.append(type_package+"/"+type_name)
+                else:
+                    if type_name not in self.includes:
+                        self.includes.append(type_name)
+                cls = MessageDataType
+                if type_package is not None:
+                    code_type = type_package + "::" + type_name
+                else:
+                    code_type = type_name
+                size = 0
+            if type_array:
+                self.data.append(
+                    ArrayDataType(name, code_type, size, cls, type_array_size))
+            else:
+                self.data.append(cls(name, code_type, size))
+
+    def _write_serializer(self, f):
+                # serializer
+        f.write('    virtual int serialize(unsigned char *outbuffer) const\n')
+        f.write('    {\n')
+        f.write('      int offset = 0;\n')
+        for d in self.data:
+            d.serialize(f)
+        f.write('      return offset;\n')
+        f.write('    }\n')
+        f.write('\n')
+
+    def _write_deserializer(self, f):
+        # deserializer
+        f.write('    virtual int deserialize(unsigned char *inbuffer)\n')
+        f.write('    {\n')
+        f.write('      int offset = 0;\n')
+        for d in self.data:
+            d.deserialize(f)
+        f.write('      return offset;\n')
+        f.write('    }\n')
+        f.write('\n')
+
+    def _write_std_includes(self, f):
+        f.write('#include <stdint.h>\n')
+        f.write('#include <string.h>\n')
+        f.write('#include <stdlib.h>\n')
+        f.write('#include "ros/msg.h"\n')
+
+    def _write_msg_includes(self, f):
+        for i in self.includes:
+            if find_message_module(remove_module(i)) is self.package:
+                f.write('#include "%s.h"\n' % remove_module(i))
+            else:
+                f.write('#include "../%s.h"\n' % i)
+
+    def _write_constructor(self, f):
+        f.write('    %s()%s\n' % (self.name, ':' if self.data else ''))
+        if self.data:
+            for d in self.data[:-1]:
+                d.make_initializer(f, ',')
+            self.data[-1].make_initializer(f, '')
+        f.write('    {\n    }\n\n')
+
+    def _write_data(self, f):
+        for d in self.data:
+            d.make_declaration(f)
+        for e in self.enums:
+            e.make_declaration(f)
+        f.write('\n')
+
+    def _write_getType(self, f):
+        if self.package is not None:
+            f.write('    const char * getType(){ return "%s/%s"; };\n' %
+                    (self.package, self.name))
+        else:
+            f.write('    const char * getType(){ return "%s"; };\n' %
+                    (self.name))
+
+    def _write_getMD5(self, f):
+        f.write('    const char * getMD5(){ return "%s"; };\n' % self.md5)
+
+    def _write_conversion(self, f):
+        f.write('\n')
+        f.write('    void fromASN1(asn1scc%s *var)\n' % self.name)
+        f.write('    {\n')
+        if self.data:
+            for d in self.data:
+                print(d)
+                if isinstance(d, MessageDataType):
+                    d.convert_from(f, '      ')
+                elif isinstance(d, StringDataType):
+                    # TODO: Handle string data type
+                    pass
+                elif isinstance(d, TimeDataType):
+                    # TODO: Handle time data type
+                    pass
+                elif isinstance(d, ArrayDataType):
+                    # TODO: Handle array data type
+                    pass
+                elif isinstance(d, PrimitiveDataType):
+                    d.convert_from(f, '      ')
+                else:
+                    panic("I don't know how to handle %s data type!" % self.name)
+        f.write('    }\n\n')
+        f.write('\n')
+        f.write('    void toASN1(asn1scc%s *var)\n' % self.name)
+        f.write('    {\n')
+        if self.data:
+            for d in self.data:
+                print(d)
+                if isinstance(d, MessageDataType):
+                    d.convert_to(f, '      ')
+                elif isinstance(d, StringDataType):
+                    # TODO: Handle string data type
+                    pass
+                elif isinstance(d, TimeDataType):
+                    # TODO: Handle time data type
+                    pass
+                elif isinstance(d, ArrayDataType):
+                    # TODO: Handle array data type
+                    pass
+                elif isinstance(d, PrimitiveDataType):
+                    d.convert_to(f, '      ')
+                else:
+                    panic("I don't know how to handle %s data type!" % self.name)
+        f.write('    }\n\n')
+
+    def _write_impl(self, f):
+        f.write('class %s : public ros::Msg\n' % self.name)
+        f.write('{\n')
+        f.write('  public:\n')
+        self._write_data(f)
+        self._write_constructor(f)
+        self._write_serializer(f)
+        self._write_deserializer(f)
+        self._write_getType(f)
+        self._write_getMD5(f)
+        self._write_conversion(f)
+        f.write('\n')
+        f.write('};\n')
+
+    def make_header(self, f):
+        if self.package is not None:
+            f.write('#ifndef _ROS_%s_%s_h\n' % (self.package, self.name))
+            f.write('#define _ROS_%s_%s_h\n' % (self.package, self.name))
+        else:
+            f.write('#ifndef _ROS_%s_h\n' % (self.name))
+            f.write('#define _ROS_%s_h\n' % (self.name))
+        f.write('\n')
+        self._write_std_includes(f)
+        self._write_msg_includes(f)
+
+        f.write('\n')
+        if self.package is not None:
+            f.write('namespace %s\n' % self.package)
+            f.write('{\n')
+        f.write('\n')
+        self._write_impl(f)
+        f.write('\n')
+        if self.package is not None:
+            f.write('}\n')
+        f.write('#endif')
+
+    def make_msg(self, f):
+        f.write(self.message_text)
+
+
+ROS_TO_EMBEDDED_TYPES = {
+    'bool':     ('bool',              1, PrimitiveDataType, []),
+    'byte':     ('int8_t',            1, PrimitiveDataType, []),
+    'int8':     ('int8_t',            1, PrimitiveDataType, []),
+    'char':     ('uint8_t',           1, PrimitiveDataType, []),
+    'uint8':    ('uint8_t',           1, PrimitiveDataType, []),
+    'int16':    ('int16_t',           2, PrimitiveDataType, []),
+    'uint16':   ('uint16_t',          2, PrimitiveDataType, []),
+    'int32':    ('int32_t',           4, PrimitiveDataType, []),
+    'uint32':   ('uint32_t',          4, PrimitiveDataType, []),
+    'int64':    ('int64_t',           8, PrimitiveDataType, []),
+    'uint64':   ('uint64_t',          8, PrimitiveDataType, []),
+    'float32':  ('float',             4, PrimitiveDataType, []),
+    'float64':  ('double',            8, PrimitiveDataType, []),
+    'time':     ('ros::Time',         8, TimeDataType, ['ros/time']),
+    'duration': ('ros::Duration',     8, TimeDataType, ['ros/duration']),
+    'string':   ('char*',             0, StringDataType, []),
+    'Header':   ('std_msgs::Header',  0, MessageDataType, ['std_msgs/Header'])
+}
