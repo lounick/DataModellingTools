@@ -25,7 +25,8 @@ primitive_types = {
     'T-Int16': 'int16', 'T-UInt16': 'uint16', 'T-Int32': 'int32',
     'T-UInt32': 'uint32', 'T-Int64': 'int64', 'T-UInt64': 'uint64',
     'T-Float': 'float32', 'T-Double': 'float64', 'T-String': 'string',
-    'T-Time': 'time', 'T-Time': 'duration', 'T-Int8': 'byte', 'T-UInt8': 'char'}
+    'T-Time': 'time', 'T-Duration': 'duration', 'T-Int8': 'byte',
+    'T-UInt8': 'char'}
 
 ans1_simple_types = ['BOOLEAN', 'INTEGER', 'BIT STRING', 'OCTET STRING', 'NULL',
                      'OBJECT IDENTIFIER', 'REAL', 'ENUMERATED',
@@ -258,6 +259,9 @@ def process_message(msg: str) -> dict:
                 enum_members = asnParser.g_names[member[1]._leafType]._members
                 data_type = get_enum_data_type(enum_members)
                 msg_dict['variables'].append([data_type, member[0]])
+            elif member_type in primitive_types.keys():
+                msg_dict['variables'].append(
+                [primitive_types[member_type], member[0]])
             elif leaf_type is 'SEQUENCE' or leaf_type is 'SET':
                 msg_dict['variables'].append(
                     [find_message_module(member_type) + '/' + member_type,
@@ -289,16 +293,15 @@ def process_message(msg: str) -> dict:
                     else:
                         msg_dict['variables'].append(
                             [find_type(contained_type)+array_str, member[0]])
-            elif member_type in primitive_types.keys():
-                msg_dict['variables'].append(
-                    [primitive_types[member_type], member[0]])
             else:
+                print("Finding type for %s"%member[0])
                 msg_dict['variables'].append([find_type(member[1]), member[0]])
         return msg_dict
 
 
 def find_type(member: AsnNode) -> str:
-    if member._leafType in supported_asn1_types:
+    if (member._leafType in supported_asn1_types or
+            asnParser.g_leafTypeDict[member._leafType]):
         if member._leafType is 'BOOLEAN':
             return 'bool'
         elif member._leafType is 'INTEGER':
@@ -391,6 +394,24 @@ def remove_module(msg_type: str) -> str:
     return msg_type
 
 
+def find_type_length(var_name: str) -> int:
+    count = 0
+    str_len = 0
+    for k, v in asnParser.g_names.items():
+        if isinstance(v, AsnSequence):
+            for m in v._members:
+                if var_name == m[0]:
+                    # print(asnParser.g_names[m[1]._leafType])
+                    str_len = asnParser.g_names[m[1]._leafType]._range[1]
+                    count += 1
+    if count > 1:
+        panic("More than 1 strings with the same name. This is not supported")
+    elif count is 0:
+        panic("Could not fing the string length")
+
+    return str_len
+
+
 def type_to_var(ty):
     lookup = {
         1: 'uint8_t',
@@ -467,13 +488,11 @@ class PrimitiveDataType:
                         '(8 * %d);\n' % (self.name, self.type, i+1, i+1))
         f.write('      offset += sizeof(this->%s);\n' % self.name)
 
-    def convert_from(self, f, spacing, prefix=None):
-        name = prefix + '.' + self.name if prefix is not None else self.name
-        f.write(spacing + '%s = var->%s;\n' % (name, name))
+    def convert_from(self, f, spacing):
+        f.write(spacing + '%s = var->%s;\n' % (self.name, self.name))
 
-    def convert_to(self, f, spacing, prefix=None):
-        name = prefix + '.' + self.name if prefix is not None else self.name
-        f.write(spacing + 'var->%s = %s;\n' % (name, name))
+    def convert_to(self, f, spacing):
+        f.write(spacing + 'var->%s = %s;\n' % (self.name, self.name))
 
 
 class MessageDataType(PrimitiveDataType):
@@ -490,13 +509,11 @@ class MessageDataType(PrimitiveDataType):
         f.write('      offset += this->%s.deserialize(inbuffer + offset);\n' %
                 self.name)
 
-    def convert_from(self, f, spacing, prefix=None):
-        name = prefix + '.' + self.name if prefix is not None else self.name
-        f.write(spacing + '%s.fromASN1(&var->%s);\n' % (name, name))
+    def convert_from(self, f, spacing):
+        f.write(spacing + '%s.fromASN1(&var->%s);\n' % (self.name, self.name))
 
-    def convert_to(self, f, spacing, prefix=None):
-        name = prefix + '.' + self.name if prefix is not None else self.name
-        f.write(spacing + '%s.toASN1(&var->%s);\n' % (name, name))
+    def convert_to(self, f, spacing):
+        f.write(spacing + '%s.toASN1(&var->%s);\n' % (self.name, self.name))
 
 class StringDataType(PrimitiveDataType):
     """ Need to convert to signed char *. """
@@ -505,8 +522,14 @@ class StringDataType(PrimitiveDataType):
         f.write('      %s("")%s\n' % (self.name, trailer))
 
     def make_declaration(self, f):
-        f.write('    typedef const char* _%s_type;\n    _%s_type %s;\n' %
-                (self.name, self.name, self.name))
+        # In declaration we need to find the lengh from the type
+        # print ("string length:", find_type_length(self.name))
+
+        # f.write('    typedef const char* _%s_type;\n    _%s_type %s;\n' %
+        # Length should be increased by 1 for NULL termination
+        length = find_type_length(self.name)
+        f.write('    typedef char _%s_type[%d];\n    _%s_type %s;\n' %
+                (self.name, length + 1, self.name, self.name))
 
     def serialize(self, f):
         cn = self.name.replace("[", "").replace("]", "")
@@ -529,6 +552,14 @@ class StringDataType(PrimitiveDataType):
         f.write('      inbuffer[offset+length_%s-1]=0;\n' % cn)
         f.write('      this->%s = (char *)(inbuffer + offset-1);\n' % self.name)
         f.write('      offset += length_%s;\n' % cn)
+
+    def convert_from(self, f, spacing):
+        f.write(spacing + 'strncpy(%s, var->%s, sizeof(%s));\n' %
+                (self.name, self.name, self.name))
+
+    def convert_to(self, f, spacing):
+        f.write(spacing + 'strncpy(var->%s, %s, sizeof(var->%s));\n' %
+                (self.name, self.name, self.name))
 
 
 class TimeDataType(PrimitiveDataType):
@@ -554,6 +585,14 @@ class TimeDataType(PrimitiveDataType):
         self.sec.deserialize(f)
         self.nsec.deserialize(f)
 
+    def convert_from(self, f, spacing):
+        f.write(spacing + '%s.sec = var->%s.sec;\n' % (self.name, self.name))
+        f.write(spacing + '%s.nsec = var->%s.nsec;\n' % (self.name, self.name))
+
+    def convert_to(self, f, spacing):
+        f.write(spacing + 'var->%s.sec = %s.sec;\n' % (self.name, self.name))
+        f.write(spacing + 'var->%s.nsec = %s.nsec;\n' % (self.name, self.name))
+
 
 class ArrayDataType(PrimitiveDataType):
 
@@ -573,10 +612,11 @@ class ArrayDataType(PrimitiveDataType):
 
     def make_declaration(self, f):
         if self.size is None:
+            length = find_type_length(self.name)
             f.write('    uint32_t %s_length;\n' % self.name)
-            f.write('    typedef %s _%s_type;\n' % (self.type, self.name))
-            f.write('    _%s_type st_%s;\n' % (self.name, self.name))  # static instance for copy
-            f.write('    _%s_type * %s;\n' % (self.name, self.name))
+            # f.write('    typedef %s _%s_type;\n' % (self.type, self.name))
+            f.write('    %s st_%s;\n' % (self.type, self.name))  # static instance for copy
+            f.write('    %s %s[%d];\n' % (self.type, self.name, length))
         else:
             f.write('    %s %s[%d];\n' % (self.type, self.name, self.size))
 
@@ -631,6 +671,34 @@ class ArrayDataType(PrimitiveDataType):
             f.write('      for( uint32_t i = 0; i < %d; i++){\n' % (self.size))
             c.deserialize(f)
             f.write('      }\n')
+
+    def convert_from(self, f, spacing):
+        f.write(spacing + '{\n')
+        if self.size is None:
+            # Use length
+            f.write(spacing + '  uint32_t length = var->%s.nCount;\n' % self.name)
+            f.write(spacing + '  %s_length = length;\n' % self.name)
+        else:
+            # Copy all
+            f.write(spacing + '  uint32_t length = %d;\n' % self.size)
+        f.write(spacing + '  memcpy(%s, var->%s, length * sizeof(*%s));\n' %
+                (self.name, self.name, self.name))
+        f.write(spacing + '}\n')
+
+
+    def convert_to(self, f, spacing):
+        f.write(spacing + '{\n')
+        if self.size is None:
+            # Use length
+            f.write(spacing + '  uint32_t length = %s_length;\n' % self.name)
+            f.write(spacing + '  var->%s.nCount = length;\n' % self.name)
+        else:
+            # Copy all
+            f.write(spacing + '  uint32_t length = %d;\n' % self.size)
+        f.write(spacing + '  memcpy(var->%s, %s, length * sizeof(*%s));\n' %
+                (self.name, self.name, self.name))
+        f.write(spacing + '}\n')
+
 
 
 # Messages
@@ -758,6 +826,8 @@ class Message:
         for i in self.includes:
             if find_message_module(remove_module(i)) is self.package:
                 f.write('#include "%s.h"\n' % remove_module(i))
+            elif remove_module(i) in ROS_TO_EMBEDDED_TYPES.keys():
+                f.write('#include "%s.h"\n' % ROS_TO_EMBEDDED_TYPES[remove_module(i)][3][0])
             else:
                 f.write('#include "../%s.h"\n' % i)
 
@@ -793,18 +863,15 @@ class Message:
         f.write('    {\n')
         if self.data:
             for d in self.data:
-                print(d)
+                # print(d)
                 if isinstance(d, MessageDataType):
                     d.convert_from(f, '      ')
                 elif isinstance(d, StringDataType):
-                    # TODO: Handle string data type
-                    pass
+                    d.convert_from(f, '      ')
                 elif isinstance(d, TimeDataType):
-                    # TODO: Handle time data type
-                    pass
+                    d.convert_from(f, '      ')
                 elif isinstance(d, ArrayDataType):
-                    # TODO: Handle array data type
-                    pass
+                    d.convert_from(f, '      ')
                 elif isinstance(d, PrimitiveDataType):
                     d.convert_from(f, '      ')
                 else:
@@ -815,18 +882,14 @@ class Message:
         f.write('    {\n')
         if self.data:
             for d in self.data:
-                print(d)
                 if isinstance(d, MessageDataType):
                     d.convert_to(f, '      ')
                 elif isinstance(d, StringDataType):
-                    # TODO: Handle string data type
-                    pass
+                    d.convert_to(f, '      ')
                 elif isinstance(d, TimeDataType):
-                    # TODO: Handle time data type
-                    pass
+                    d.convert_to(f, '      ')
                 elif isinstance(d, ArrayDataType):
-                    # TODO: Handle array data type
-                    pass
+                    d.convert_to(f, '      ')
                 elif isinstance(d, PrimitiveDataType):
                     d.convert_to(f, '      ')
                 else:
