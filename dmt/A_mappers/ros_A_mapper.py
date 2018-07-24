@@ -820,6 +820,7 @@ class Message:
         f.write('#include <string.h>\n')
         f.write('#include <stdlib.h>\n')
         f.write('#include "ros/msg.h"\n')
+        f.write('#include "%s.h"\n' % self.name.lower())
 
     def _write_msg_includes(self, f):
         for i in self.includes:
