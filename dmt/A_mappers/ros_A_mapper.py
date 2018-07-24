@@ -112,8 +112,6 @@ def OnStartup(unused_modelingLanguage: str, asnFile: str, outputDir: str, badTyp
                 header.close()
                 msg_file.close()
 
-
-
 def OnBasic(unused_nodeTypename: str, unused_node: AsnBasicNode, unused_leafTypeDict: AST_Leaftypes) -> None:
     pass
 
@@ -143,9 +141,7 @@ def OnChoice(unused_nodeTypename: str, unused_node: AsnChoice, unused_leafTypeDi
 
 
 def OnShutdown(unused_badTypes: SetOfBadTypenames) -> None:
-    # TODO: Add methods that translate from ASN.1 to ROS message and the opposite
     pass
-
 
 def generate_msg_text(msg: str) -> str:
     global g_msg_text
@@ -255,7 +251,9 @@ def process_message(msg: str) -> dict:
             member_type = member[1]._leafType
             leaf_type = leaf_types[member_type]
             # TODO: We should also add a variable for the enumerated
-            if leaf_type is 'ENUMERATED':
+            if leaf_type is 'CHOICE':
+                panic("ROS doesn't support choice messages")
+            elif leaf_type is 'ENUMERATED':
                 enum_members = asnParser.g_names[member[1]._leafType]._members
                 data_type = get_enum_data_type(enum_members)
                 msg_dict['variables'].append([data_type, member[0]])
