@@ -554,7 +554,7 @@ def main() -> None:
         #    modelingLanguage = "Lustre"  # pragma: no cover
 
         # The code for these mappers needs C ASN.1 codecs
-        if modelingLanguage.lower() in ["gui_ri", "gui_pi", "vhdl", "rhapsody"]:
+        if modelingLanguage.lower() in ["gui_ri", "gui_pi", "vhdl", "rhapsody", "ros_bridge"]:
             modelingLanguage = "C"
 
         if modelingLanguage in async_languages:

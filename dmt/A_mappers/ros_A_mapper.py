@@ -84,12 +84,16 @@ def OnStartup(unused_modelingLanguage: str, asnFile: str, outputDir: str, badTyp
 
     # For each SEQUENCE or SET we need to generate a message header
     # Format a ROS message based on the ASN.1 message
+    # TODO (Niko): Even if it is not a SEQUENCE or SET we should generate
+    # messages. An interface can accept a single value as data, for example
+    # a single UInt32. We should be able to serialise and deserialise this
+    # king of message (See for example std_msgs/UInt32.msg)
     for msg in asnParser.g_typesOfFile[asnFile]:
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
                 isinstance(asnParser.g_names[msg], AsnSet)):
                 g_ros_repr[msg] = process_message(msg)
 
-    # Calculate the MD5 and generate the header
+    # Calculate the MD5
     for msg in asnParser.g_typesOfFile[asnFile]:
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
                 isinstance(asnParser.g_names[msg], AsnSet)):
@@ -820,7 +824,9 @@ class Message:
         f.write('#include <string.h>\n')
         f.write('#include <stdlib.h>\n')
         f.write('#include "ros/msg.h"\n')
-        f.write('#include "%s.h"\n' % self.name.lower())
+        # TODO (Niko): Check if this is correct. Actually asn1scc generates per
+        # file headers while we generate per message.
+        # f.write('#include "%s.h"\n' % self.name.lower())
 
     def _write_msg_includes(self, f):
         for i in self.includes:
