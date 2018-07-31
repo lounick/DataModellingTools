@@ -302,18 +302,17 @@ def process_message(msg: str) -> dict:
 
 
 def find_type(member: AsnNode) -> str:
-    # TODO: Check if the if condition is correct.
-    leaf_types = [member._leafType, asnParser.g_leafTypeDict[member._leafType]]
-    if any(type in supported_asn1_types for type in leaf_types):
-        if any(type in 'BOOLEAN' for type in leaf_types):
+    if (member._leafType in supported_asn1_types or
+            asnParser.g_leafTypeDict[member._leafType]):
+        if member._leafType is 'BOOLEAN':
             return 'bool'
-        elif any(type in 'INTEGER' for type in leaf_types):
+        elif member._leafType is 'INTEGER':
             return find_integer_type(member)
-        elif any(type in 'OCTET STRING' for type in leaf_types):
+        elif member._leafType is 'OCTET STRING':
             return 'uint8[]'
-        elif any(type in 'REAL' for type in leaf_types):
+        elif member._leafType is 'REAL':
             return find_real_type(member)
-        elif any(type in 'ENUMERATED' for type in leaf_types):
+        elif member._leafType is 'ENUMERATED':
             panic("ENUMERATED types shouldn't be handled here!")
         else:
             return 'string'
