@@ -25,8 +25,7 @@ primitive_types = {
     'T-Int16': 'int16', 'T-UInt16': 'uint16', 'T-Int32': 'int32',
     'T-UInt32': 'uint32', 'T-Int64': 'int64', 'T-UInt64': 'uint64',
     'T-Float': 'float32', 'T-Double': 'float64', 'T-String': 'string',
-    'T-Time': 'time', 'T-Duration': 'duration', 'T-Int8': 'byte',
-    'T-UInt8': 'char'}
+    'T-Time': 'time', 'T-Duration': 'duration'}
 
 ans1_simple_types = ['BOOLEAN', 'INTEGER', 'BIT STRING', 'OCTET STRING', 'NULL',
                      'OBJECT IDENTIFIER', 'REAL', 'ENUMERATED',
@@ -92,29 +91,36 @@ def OnStartup(unused_modelingLanguage: str, asnFile: str, outputDir: str, badTyp
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
                 isinstance(asnParser.g_names[msg], AsnSet)):
                 g_ros_repr[msg] = process_message(msg)
+        else:
+            # print(msg, asnParser.g_names[msg])
+            g_ros_repr[msg] = generate_basic_type_message(msg)
+
 
     # Calculate the MD5
     for msg in asnParser.g_typesOfFile[asnFile]:
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
                 isinstance(asnParser.g_names[msg], AsnSet)):
-                compute_md5(msg)
+                pass
+        compute_md5(msg)
 
     # Generate the header
     for msg in asnParser.g_typesOfFile[asnFile]:
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
                 isinstance(asnParser.g_names[msg], AsnSet)):
-                module = find_message_module(msg)
-                message = Message(msg, module, g_msg_text[msg],
-                                  g_md5_hashes[msg])
-                output_path = outputDir + os.sep + module
-                if not os.path.exists(output_path):
-                    os.makedirs(output_path)
-                header = open(output_path + "/" + message.name + ".h", "w")
-                msg_file = open(output_path + "/" + message.name + ".msg", "w")
-                message.make_header(header)
-                message.make_msg(msg_file)
-                header.close()
-                msg_file.close()
+                pass
+        module = find_message_module(msg)
+        message = Message(msg, module, g_msg_text[msg],
+                          g_md5_hashes[msg])
+        output_path = outputDir + os.sep + module
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+        header = open(output_path + "/" + message.name + ".h", "w")
+        msg_file = open(output_path + "/" + message.name + ".msg", "w")
+        message.make_header(header)
+        message.make_msg(msg_file)
+        header.close()
+        msg_file.close()
+
 
 def OnBasic(unused_nodeTypename: str, unused_node: AsnBasicNode, unused_leafTypeDict: AST_Leaftypes) -> None:
     pass
@@ -147,6 +153,7 @@ def OnChoice(unused_nodeTypename: str, unused_node: AsnChoice, unused_leafTypeDi
 def OnShutdown(unused_badTypes: SetOfBadTypenames) -> None:
     pass
 
+
 def generate_msg_text(msg: str) -> str:
     global g_msg_text
 
@@ -174,7 +181,7 @@ def compute_md5_from_ast(msg: str) -> str:
 
 
 def compute_md5(msg: str) -> str:
-    print("Calculating md5 for message: %s" % (msg))
+    # print("Calculating md5 for message: %s" % (msg))
 
     global g_ros_repr
     global g_md5_hashes
@@ -184,6 +191,7 @@ def compute_md5(msg: str) -> str:
 
     hasher = hashlib.md5()
     msg_text = generate_msg_text(msg).splitlines()
+    # print(msg_text)
     for idx in range(len(msg_text)):
         line = msg_text[idx]
         msg_type = line.split(' ')[0]
@@ -215,6 +223,25 @@ def find_message_module(msg: str) -> str:
     if num > 1:
         panic("Can't handle that for now...")
     return ret
+
+
+def generate_basic_type_message(msg: str) -> dict:
+    try:
+        definition = asnParser.g_names[msg]
+    except KeyError:
+        panic("I don't have the info to build message %s" % (msg))
+
+    msg_dict = {}
+    msg_dict['constants'] = []
+    msg_dict['variables'] = []
+    try:
+        msg_dict['variables'].append(
+            [find_type(definition), 'data', definition._range[1]])
+        print(definition._range[1])
+    except AttributeError:
+        msg_dict['variables'].append(
+            [find_type(definition), 'data'])
+    return msg_dict
 
 
 def process_message(msg: str) -> dict:
@@ -281,38 +308,41 @@ def process_message(msg: str) -> dict:
                         contained_leaf_type is 'SET'):
                         msg_dict['variables'].append(
                             [find_message_module(contained_type) +
-                             '/' + contained_type+array_str, member[0]])
+                             '/' + contained_type + array_str, member[0],
+                             max_range])
                 elif (contained_leaf_type is 'ENUMERATED'):
                     enum_members = asnParser.g_names[contained_type]._members
                     data_type = get_enum_data_type(enum_members)
                     msg_dict['variables'].append(
-                        [data_type+array_str, member[0]])
+                        [data_type + array_str, member[0], max_range])
                 else:
                     if contained_type in primitive_types.keys():
                         msg_dict['variables'].append(
-                            [primitive_types[contained_type]+array_str,
-                                member[0]])
+                            [primitive_types[contained_type] + array_str,
+                                member[0], max_range])
                     else:
                         msg_dict['variables'].append(
-                            [find_type(contained_type)+array_str, member[0]])
+                            [find_type(contained_type) + array_str, member[0],
+                                max_range])
             else:
                 print("Finding type for %s"%member[0])
-                msg_dict['variables'].append([find_type(member[1]), member[0]])
+                msg_dict['variables'].append([find_type(member[1]), member[0], member[1]._range[1]])
         return msg_dict
 
 
 def find_type(member: AsnNode) -> str:
     if (member._leafType in supported_asn1_types or
-            asnParser.g_leafTypeDict[member._leafType]):
-        if member._leafType is 'BOOLEAN':
+            asnParser.g_leafTypeDict[member._leafType] in supported_asn1_types):
+        if member._leafType == 'BOOLEAN':
             return 'bool'
-        elif member._leafType is 'INTEGER':
+        elif member._leafType == 'INTEGER':
             return find_integer_type(member)
-        elif member._leafType is 'OCTET STRING':
+        elif member._leafType == 'OCTET STRING':
+            # An octet string should always have a size
             return 'uint8[]'
-        elif member._leafType is 'REAL':
+        elif member._leafType == 'REAL':
             return find_real_type(member)
-        elif member._leafType is 'ENUMERATED':
+        elif member._leafType == 'ENUMERATED':
             panic("ENUMERATED types shouldn't be handled here!")
         else:
             return 'string'
@@ -403,15 +433,26 @@ def find_type_length(var_name: str) -> int:
         if isinstance(v, AsnSequence):
             for m in v._members:
                 if var_name == m[0]:
-                    # print(asnParser.g_names[m[1]._leafType])
                     str_len = asnParser.g_names[m[1]._leafType]._range[1]
                     count += 1
+        if isinstance(v, AsnString):
+            print(k, v, var_name)
     if count > 1:
         panic("More than 1 strings with the same name. This is not supported")
     elif count is 0:
-        panic("Could not fing the string length")
+        panic("Could not find the string length")
 
     return str_len
+
+
+def find_type_length_from_msg(msg_name: str, var_name: str) -> int:
+    global g_ros_repr
+    members = g_ros_repr[msg_name]['variables']
+    print(members)
+    for m in members:
+        if var_name == m[1]:
+            return m[2]
+    return -1
 
 
 def type_to_var(ty):
@@ -517,8 +558,15 @@ class MessageDataType(PrimitiveDataType):
     def convert_to(self, f, spacing):
         f.write(spacing + '%s.toASN1(&var->%s);\n' % (self.name, self.name))
 
+
 class StringDataType(PrimitiveDataType):
     """ Need to convert to signed char *. """
+
+    def __init__(self, name, ty, bytes, string_size=None):
+        self.name = name
+        self.type = ty
+        self.bytes = bytes
+        self.size = string_size
 
     def make_initializer(self, f, trailer):
         f.write('      %s("")%s\n' % (self.name, trailer))
@@ -529,9 +577,9 @@ class StringDataType(PrimitiveDataType):
 
         # f.write('    typedef const char* _%s_type;\n    _%s_type %s;\n' %
         # Length should be increased by 1 for NULL termination
-        length = find_type_length(self.name)
+        # length = find_type_length(self.name)
         f.write('    typedef char _%s_type[%d];\n    _%s_type %s;\n' %
-                (self.name, length + 1, self.name, self.name))
+                (self.name, self.size + 1, self.name, self.name))
 
     def serialize(self, f):
         cn = self.name.replace("[", "").replace("]", "")
@@ -598,10 +646,11 @@ class TimeDataType(PrimitiveDataType):
 
 class ArrayDataType(PrimitiveDataType):
 
-    def __init__(self, name, ty, bytes, cls, array_size=None):
+    def __init__(self, name, ty, bytes, cls, max_size, array_size=None):
         self.name = name
         self.type = ty
         self.bytes = bytes
+        self.max_size = max_size
         self.size = array_size
         self.cls = cls
 
@@ -614,11 +663,10 @@ class ArrayDataType(PrimitiveDataType):
 
     def make_declaration(self, f):
         if self.size is None:
-            length = find_type_length(self.name)
             f.write('    uint32_t %s_length;\n' % self.name)
             # f.write('    typedef %s _%s_type;\n' % (self.type, self.name))
             f.write('    %s st_%s;\n' % (self.type, self.name))  # static instance for copy
-            f.write('    %s %s[%d];\n' % (self.type, self.name, length))
+            f.write('    %s %s[%d];\n' % (self.type, self.name, self.max_size))
         else:
             f.write('    %s %s[%d];\n' % (self.type, self.name, self.size))
 
@@ -791,10 +839,20 @@ class Message:
                     code_type = type_name
                 size = 0
             if type_array:
+                max_len = find_type_length_from_msg(self.name, name)
+                if (max_len < 0):
+                    panic('There should be a maximum length of the array!')
                 self.data.append(
-                    ArrayDataType(name, code_type, size, cls, type_array_size))
+                    ArrayDataType(name, code_type, size, cls, max_len,
+                                  type_array_size))
             else:
-                self.data.append(cls(name, code_type, size))
+                if cls == StringDataType:
+                    max_len = find_type_length_from_msg(self.name, name)
+                    if (max_len < 0):
+                        panic('There should be a maximum length of the string!')
+                    self.data.append(cls(name, code_type, size, max_len))
+                else:
+                    self.data.append(cls(name, code_type, size))
 
     def _write_serializer(self, f):
                 # serializer
