@@ -109,8 +109,12 @@ def OnStartup(unused_modelingLanguage: str, asnFile: str, outputDir: str, badTyp
                 isinstance(asnParser.g_names[msg], AsnSet)):
                 pass
         module = find_message_module(msg)
+        module = module.replace('-','_')
+        print(module)
         message = Message(msg, module, g_msg_text[msg],
                           g_md5_hashes[msg])
+        message.name = message.name.replace('-','_')
+        print(message.name)
         output_path = outputDir + os.sep + module
         if not os.path.exists(output_path):
             os.makedirs(output_path)
@@ -532,10 +536,10 @@ class PrimitiveDataType:
         f.write('      offset += sizeof(this->%s);\n' % self.name)
 
     def convert_from(self, f, spacing):
-        f.write(spacing + '%s = var->%s;\n' % (self.name, self.name))
+        f.write(spacing + '%s = *var;\n' % (self.name))
 
     def convert_to(self, f, spacing):
-        f.write(spacing + 'var->%s = %s;\n' % (self.name, self.name))
+        f.write(spacing + '*var = %s;\n' % (self.name))
 
 
 class MessageDataType(PrimitiveDataType):
@@ -922,7 +926,7 @@ class Message:
 
     def _write_conversion(self, f):
         f.write('\n')
-        f.write('    void fromASN1(asn1scc%s *var)\n' % self.name)
+        f.write('    void fromASN1(const asn1Scc%s *var)\n' % self.name)
         f.write('    {\n')
         if self.data:
             for d in self.data:
@@ -941,7 +945,7 @@ class Message:
                     panic("I don't know how to handle %s data type!" % self.name)
         f.write('    }\n\n')
         f.write('\n')
-        f.write('    void toASN1(asn1scc%s *var)\n' % self.name)
+        f.write('    void toASN1(asn1Scc%s *var) const\n' % self.name)
         f.write('    {\n')
         if self.data:
             for d in self.data:
