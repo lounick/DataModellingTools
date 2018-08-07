@@ -7,6 +7,7 @@ except ImportError:
     from io import StringIO
 
 import hashlib
+import math
 import sys
 from typing import Union, List
 
@@ -56,23 +57,27 @@ def Version() -> None:
           "$Id: python_A_mapper.py $")  # pragma: no cover
 
 
+def print_debugging_info(asnParser):
+    import pprint
+    pprint.pprint('===================================================================')
+    pprint.pprint(asnParser.g_modules)
+    pprint.pprint('-------------------------------------------------------------------')
+    pprint.pprint(asnParser.g_names)
+    pprint.pprint('-------------------------------------------------------------------')
+    pprint.pprint(asnParser.g_leafTypeDict)
+    pprint.pprint('-------------------------------------------------------------------')
+    pprint.pprint(asnParser.g_typesOfFile)
+    pprint.pprint('-------------------------------------------------------------------')
+    pprint.pprint(asnParser.g_astOfFile)
+    pprint.pprint('-------------------------------------------------------------------')
+    pprint.pprint(asnParser.g_typesOfFile[asnFile])
+    pprint.pprint('-------------------------------------------------------------------')
+    pprint.pprint(asnParser.g_astOfFile[asnFile])
+    pprint.pprint('===================================================================')
+
+
 def OnStartup(unused_modelingLanguage: str, asnFile: str, outputDir: str, badTypes: SetOfBadTypenames) -> None:
-    # import pprint
-    # pprint.pprint('===================================================================')
-    # pprint.pprint(asnParser.g_modules)
-    # pprint.pprint('-------------------------------------------------------------------')
-    # pprint.pprint(asnParser.g_names)
-    # pprint.pprint('-------------------------------------------------------------------')
-    # pprint.pprint(asnParser.g_leafTypeDict)
-    # pprint.pprint('-------------------------------------------------------------------')
-    # pprint.pprint(asnParser.g_typesOfFile)
-    # pprint.pprint('-------------------------------------------------------------------')
-    # pprint.pprint(asnParser.g_astOfFile)
-    # pprint.pprint('-------------------------------------------------------------------')
-    # pprint.pprint(asnParser.g_typesOfFile[asnFile])
-    # pprint.pprint('-------------------------------------------------------------------')
-    # pprint.pprint(asnParser.g_astOfFile[asnFile])
-    # pprint.pprint('===================================================================')
+    # print_debugging_info(asnParser)
     if not asnFile.endswith(".asn"):
         panic("The ASN.1 grammar file (%s) doesn't end in .asn" %
               asnFile)  # pragma: no cover
@@ -83,14 +88,10 @@ def OnStartup(unused_modelingLanguage: str, asnFile: str, outputDir: str, badTyp
 
     # For each SEQUENCE or SET we need to generate a message header
     # Format a ROS message based on the ASN.1 message
-    # TODO (Niko): Even if it is not a SEQUENCE or SET we should generate
-    # messages. An interface can accept a single value as data, for example
-    # a single UInt32. We should be able to serialise and deserialise this
-    # king of message (See for example std_msgs/UInt32.msg)
     for msg in asnParser.g_typesOfFile[asnFile]:
         if (isinstance(asnParser.g_names[msg], AsnSequence) or
-                isinstance(asnParser.g_names[msg], AsnSet)):
-                g_ros_repr[msg] = process_message(msg)
+            isinstance(asnParser.g_names[msg], AsnSet)):
+            g_ros_repr[msg] = process_message(msg)
         else:
             # print(msg, asnParser.g_names[msg])
             g_ros_repr[msg] = generate_basic_type_message(msg)
@@ -168,9 +169,8 @@ def generate_msg_text(msg: str) -> str:
 
     buff = StringIO()
 
-    for const in definition['constants']:
-        buff.write("%s %s=%s\n" % (const[0], const[1], const[2]))
-
+    for typ, name, value in definition['constants']:
+        buff.write("%s %s=%s\n" % (typ, name, value))
     for var in definition['variables']:
         buff.write("%s %s\n" % (var[0], var[1]))
     g_msg_text[msg] = buff.getvalue().strip()
@@ -230,10 +230,9 @@ def find_message_module(msg: str) -> str:
 
 
 def generate_basic_type_message(msg: str) -> dict:
-    try:
-        definition = asnParser.g_names[msg]
-    except KeyError:
+    if msg not in asnParser.g_names:
         panic("I don't have the info to build message %s" % (msg))
+    definition = asnParser.g_names[msg]
 
     msg_dict = {}
     msg_dict['constants'] = []
@@ -241,11 +240,49 @@ def generate_basic_type_message(msg: str) -> dict:
     try:
         msg_dict['variables'].append(
             [find_type(definition), 'data', definition._range[1]])
-        print(definition._range[1])
     except AttributeError:
         msg_dict['variables'].append(
             [find_type(definition), 'data'])
     return msg_dict
+
+
+def get_variable_data(asnParser, member_type, leaf_type):
+    if leaf_type is 'CHOICE':
+        panic("ROS doesn't support choice messages")
+    elif leaf_type is 'ENUMERATED':
+        enum_members = asnParser.g_names[member[1]._leafType]._members
+        data_type = get_enum_data_type(enum_members)
+        return [data_type, member[0]]
+    elif member_type in primitive_types.keys():
+        return [primitive_types[member_type], member[0]]
+    elif leaf_type is 'SEQUENCE' or leaf_type is 'SET':
+        return [find_message_module(member_type) + '/' + member_type, member[0]]
+    elif leaf_type is 'SEQUENCEOF' or leaf_type is 'SETOF':
+        contained_type = asnParser.g_names[member_type]._containedType
+        contained_leaf_type = leaf_types[contained_type]
+        min_range, max_range = asnParser.g_names[member_type]._range
+        # Decide if it is a fixed or a variable size array
+        # This is done by checking the array limits
+        array_str = "[]"
+        if min_range == max_range:
+            array_str = "[%d]" % (min_range)
+        if (contained_leaf_type is 'SEQUENCE' or
+                contained_leaf_type is 'SET'):
+            return [find_message_module(contained_type) +
+                    '/' + contained_type + array_str, member[0],
+                    max_range]
+        elif (contained_leaf_type is 'ENUMERATED'):
+            enum_members = asnParser.g_names[contained_type]._members
+            data_type = get_enum_data_type(enum_members)
+            return [data_type + array_str, member[0], max_range]
+        elif contained_type in primitive_types.keys():
+            return [primitive_types[contained_type] + array_str,
+                    member[0], max_range]
+        else:
+            return [find_type(contained_type) + array_str, member[0],
+                    max_range]
+    else:
+        return [find_type(member[1]), member[0], member[1]._range[1]]
 
 
 def process_message(msg: str) -> dict:
@@ -286,51 +323,8 @@ def process_message(msg: str) -> dict:
             member_type = member[1]._leafType
             leaf_type = leaf_types[member_type]
             # TODO: We should also add a variable for the enumerated
-            if leaf_type is 'CHOICE':
-                panic("ROS doesn't support choice messages")
-            elif leaf_type is 'ENUMERATED':
-                enum_members = asnParser.g_names[member[1]._leafType]._members
-                data_type = get_enum_data_type(enum_members)
-                msg_dict['variables'].append([data_type, member[0]])
-            elif member_type in primitive_types.keys():
-                msg_dict['variables'].append(
-                [primitive_types[member_type], member[0]])
-            elif leaf_type is 'SEQUENCE' or leaf_type is 'SET':
-                msg_dict['variables'].append(
-                    [find_message_module(member_type) + '/' + member_type,
-                     member[0]])
-            elif leaf_type is 'SEQUENCEOF' or leaf_type is 'SETOF':
-                contained_type = asnParser.g_names[member_type]._containedType
-                contained_leaf_type = leaf_types[contained_type]
-                min_range, max_range = asnParser.g_names[member_type]._range
-                # Decide if it is a fixed or a variable size array
-                # This is done by checking the array limits
-                array_str = "[]"
-                if min_range == max_range:
-                    array_str = "[%d]" % (min_range)
-                if (contained_leaf_type is 'SEQUENCE' or
-                        contained_leaf_type is 'SET'):
-                        msg_dict['variables'].append(
-                            [find_message_module(contained_type) +
-                             '/' + contained_type + array_str, member[0],
-                             max_range])
-                elif (contained_leaf_type is 'ENUMERATED'):
-                    enum_members = asnParser.g_names[contained_type]._members
-                    data_type = get_enum_data_type(enum_members)
-                    msg_dict['variables'].append(
-                        [data_type + array_str, member[0], max_range])
-                else:
-                    if contained_type in primitive_types.keys():
-                        msg_dict['variables'].append(
-                            [primitive_types[contained_type] + array_str,
-                                member[0], max_range])
-                    else:
-                        msg_dict['variables'].append(
-                            [find_type(contained_type) + array_str, member[0],
-                                max_range])
-            else:
-                print("Finding type for %s"%member[0])
-                msg_dict['variables'].append([find_type(member[1]), member[0], member[1]._range[1]])
+            msg_dict['variables'].append(
+                get_variable_data(asnParser, member_type, leaf_type))
         return msg_dict
 
 
@@ -394,8 +388,15 @@ def get_min_integer_data_type(min_val: int, max_val: int) -> str:
     data_type += 'int'
 
     val = int(max(abs(min_val), max_val))
-    bit_num = (val.bit_length()//8) * 8
-    bit_num += (val.bit_length() % 8 > 0) * 8
+    bit_num = math.ceil(val.bit_length() / 8) * 8
+    if bit_num <= 8:
+        bit_num = 8
+    elif bit_num <= 16:
+        bit_num = 16
+    elif bit_num <= 32:
+        bit_num = 32
+    else:
+        bit_num = 64
     data_type += str(bit_num)
     return data_type
 
@@ -442,9 +443,11 @@ def find_type_length(var_name: str) -> int:
         if isinstance(v, AsnString):
             print(k, v, var_name)
     if count > 1:
-        panic("More than 1 strings with the same name. This is not supported")
+        panic("More than 1 string with the same name '{}'.".format(var_name) +
+              " This is not supported")
     elif count is 0:
-        panic("Could not find the string length")
+        panic("Could not find the string '{}'".format(var_name) + 
+              " to deterimine its length.")
 
     return str_len
 
@@ -776,13 +779,12 @@ class Message:
         # parse definition
         definition = definition.splitlines()
         for line in definition:
-            # prep work
-            line = line.strip().rstrip()
-            value = None
             # Remove the comments
             if line.find("#") > -1:
                 line = line[0:line.find("#")]
-
+            # prep work
+            line = line.strip()
+            value = None
             # Get the value of a variable if present
             if line.find("=") > -1:
                 try:
@@ -797,6 +799,7 @@ class Message:
             while "" in l:
                 l.remove("")
             if len(l) < 2:
+                print("Malformed message has no variable name")
                 continue
             ty, name = l[0:2]
             if value is not None:
