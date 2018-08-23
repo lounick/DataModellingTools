@@ -101,7 +101,7 @@ def main() -> None:
         'toSIMULINK': 'Simulink',
         'toC': 'C',
         'toCPP': 'C',
-        'toROS': 'ROS',
+        'toROS_Bridge': 'ROS',
         'toRTDS': 'RTDS',
         'toAda': 'ada',
         'toPython': 'python',

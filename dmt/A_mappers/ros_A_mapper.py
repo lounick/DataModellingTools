@@ -246,7 +246,7 @@ def generate_basic_type_message(msg: str) -> dict:
     return msg_dict
 
 
-def get_variable_data(asnParser, member_type, leaf_type):
+def get_variable_data(asnParser, member, member_type, leaf_type):
     if leaf_type is 'CHOICE':
         panic("ROS doesn't support choice messages")
     elif leaf_type is 'ENUMERATED':
@@ -324,7 +324,7 @@ def process_message(msg: str) -> dict:
             leaf_type = leaf_types[member_type]
             # TODO: We should also add a variable for the enumerated
             msg_dict['variables'].append(
-                get_variable_data(asnParser, member_type, leaf_type))
+                get_variable_data(asnParser, member, member_type, leaf_type))
         return msg_dict
 
 
@@ -932,6 +932,9 @@ class Message:
         f.write('    void fromASN1(const asn1Scc%s *var)\n' % self.name)
         f.write('    {\n')
         if self.data:
+            # TODO (Niko): If the message has more than 1 data types we should
+            # handle it as a struct (as it was before) if it is only one the
+            # primitive data type should be just assigned. Same in convert to
             for d in self.data:
                 # print(d)
                 if isinstance(d, MessageDataType):
