@@ -388,15 +388,8 @@ def get_min_integer_data_type(min_val: int, max_val: int) -> str:
     data_type += 'int'
 
     val = int(max(abs(min_val), max_val))
-    bit_num = math.ceil(val.bit_length() / 8) * 8
-    if bit_num <= 8:
-        bit_num = 8
-    elif bit_num <= 16:
-        bit_num = 16
-    elif bit_num <= 32:
-        bit_num = 32
-    else:
-        bit_num = 64
+    bits = [8, 8, 16, 32, 32, 64, 64, 64, 64]
+    bit_num = bits[math.ceil(val.bit_length() / 8)]
     data_type += str(bit_num)
     return data_type
 
@@ -539,10 +532,16 @@ class PrimitiveDataType:
         f.write('      offset += sizeof(this->%s);\n' % self.name)
 
     def convert_from(self, f, spacing):
-        f.write(spacing + '%s = *var;\n' % (self.name))
+        if self.name == 'data':
+            f.write(spacing + '%s = *var;\n' % (self.name))
+        else:
+            f.write(spacing + '%s = var->%s;\n' % (self.name, self.name))
 
     def convert_to(self, f, spacing):
-        f.write(spacing + '*var = %s;\n' % (self.name))
+        if self.name == 'data':
+            f.write(spacing + '*var = %s;\n' % (self.name))
+        else:
+            f.write(spacing + 'var->%s = %s;\n' % (self.name, self.name))
 
 
 class MessageDataType(PrimitiveDataType):
